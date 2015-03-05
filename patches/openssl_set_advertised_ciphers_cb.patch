@@ -1,0 +1,62 @@
+diff --git a/ssl/s3_srvr.c b/ssl/s3_srvr.c
+index c016139..095f4c4 100644
+--- a/ssl/s3_srvr.c
++++ b/ssl/s3_srvr.c
+@@ -1105,6 +1105,10 @@ int ssl3_get_client_hello(SSL *s)
+     }
+     p += i;
+ 
++    if ((i > 0) && s->ssl_advertised_cipher_cb) {
++        s->ssl_advertised_cipher_cb(ciphers, s->ssl_advertised_cipher_cb_arg);
++    }
++
+     /* If it is a hit, check that the cipher is in the list */
+     if ((s->hit) && (i > 0)) {
+         j = 0;
+diff --git a/ssl/ssl.h b/ssl/ssl.h
+index a6d845d..917b54e 100644
+--- a/ssl/ssl.h
++++ b/ssl/ssl.h
+@@ -412,6 +412,8 @@ typedef int (*custom_ext_parse_cb) (SSL *s, unsigned int ext_type,
+ 
+ # endif
+ 
++typedef void (*ssl_advertised_ciphers_cb_fn)(STACK_OF(SSL_CIPHER) *ciphers, void *arg);
++
+ # ifndef OPENSSL_NO_SSL_INTERN
+ 
+ /* used to hold info on the particular ciphers used */
+@@ -1636,6 +1638,8 @@ struct ssl_st {
+     /* TLS pre-shared secret session resumption */
+     tls_session_secret_cb_fn tls_session_secret_cb;
+     void *tls_session_secret_cb_arg;
++    ssl_advertised_ciphers_cb_fn ssl_advertised_cipher_cb;
++    void *ssl_advertised_cipher_cb_arg;
+     SSL_CTX *initial_ctx;       /* initial ctx, used to store sessions */
+ #   ifndef OPENSSL_NO_NEXTPROTONEG
+     /*
+@@ -2475,6 +2479,8 @@ int SSL_CTX_get_ex_new_index(long argl, void *argp, CRYPTO_EX_new *new_func,
+ 
+ int SSL_get_ex_data_X509_STORE_CTX_idx(void);
+ 
++void SSL_set_advertised_ciphers_cb(SSL *ssl, ssl_advertised_ciphers_cb_fn cb, void *arg);
++
+ # define SSL_CTX_sess_set_cache_size(ctx,t) \
+         SSL_CTX_ctrl(ctx,SSL_CTRL_SET_SESS_CACHE_SIZE,t,NULL)
+ # define SSL_CTX_sess_get_cache_size(ctx) \
+diff --git a/ssl/ssl_lib.c b/ssl/ssl_lib.c
+index e9ad2bc..b8ff06a 100644
+--- a/ssl/ssl_lib.c
++++ b/ssl/ssl_lib.c
+@@ -3486,6 +3486,11 @@ void SSL_set_msg_callback(SSL *ssl,
+     SSL_callback_ctrl(ssl, SSL_CTRL_SET_MSG_CALLBACK, (void (*)(void))cb);
+ }
+ 
++void SSL_set_advertised_ciphers_cb(SSL *ssl, ssl_advertised_ciphers_cb_fn cb, void *arg) {
++    ssl->ssl_advertised_cipher_cb = cb;
++    ssl->ssl_advertised_cipher_cb_arg = arg;
++}
++
+ /*
+  * Allocates new EVP_MD_CTX and sets pointer to it into given pointer
+  * vairable, freeing EVP_MD_CTX previously stored in that variable, if any.

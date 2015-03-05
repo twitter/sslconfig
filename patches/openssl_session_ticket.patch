@@ -1,0 +1,449 @@
+diff --git a/ssl/s3_lib.c b/ssl/s3_lib.c
+index 28129f6..79c147a 100644
+--- a/ssl/s3_lib.c
++++ b/ssl/s3_lib.c
+@@ -3775,21 +3775,26 @@ long ssl3_ctx_ctrl(SSL_CTX *ctx, int cmd, long larg, void *parg)
+     case SSL_CTRL_SET_TLSEXT_TICKET_KEYS:
+     case SSL_CTRL_GET_TLSEXT_TICKET_KEYS:
+         {
+-            unsigned char *keys = parg;
++            SESS_TICKET_KEY *keys = parg;
+             if (!keys)
+                 return 48;
+-            if (larg != 48) {
++            if (larg > 0 && larg % sizeof(SESS_TICKET_KEY) != 0) {
+                 SSLerr(SSL_F_SSL3_CTX_CTRL, SSL_R_INVALID_TICKET_KEYS_LENGTH);
+                 return 0;
+             }
+             if (cmd == SSL_CTRL_SET_TLSEXT_TICKET_KEYS) {
+-                memcpy(ctx->tlsext_tick_key_name, keys, 16);
+-                memcpy(ctx->tlsext_tick_hmac_key, keys + 16, 16);
+-                memcpy(ctx->tlsext_tick_aes_key, keys + 32, 16);
++                SSL_CTX_set_tlsext_ticket_key_list(ctx, keys, larg / sizeof(SESS_TICKET_KEY));
++            } else if (ctx->ticket_key_list == NULL ||
++                       ctx->ticket_key_list->all == NULL ||
++                       ctx->ticket_key_list->all_len < 1) {
++                SSLerr(SSL_F_SSL3_CTX_CTRL, ERR_R_PASSED_NULL_PARAMETER);
++                return 0;
+             } else {
+-                memcpy(keys, ctx->tlsext_tick_key_name, 16);
+-                memcpy(keys + 16, ctx->tlsext_tick_hmac_key, 16);
+-                memcpy(keys + 32, ctx->tlsext_tick_aes_key, 16);
++                if (larg != ctx->ticket_key_list->all_len * sizeof(SESS_TICKET_KEY)) {
++                    SSLerr(SSL_F_SSL3_CTX_CTRL, SSL_R_INVALID_TICKET_KEYS_LENGTH);
++                    return 0;
++                }
++                memcpy(keys, ctx->ticket_key_list->all, larg);
+             }
+             return 1;
+         }
+diff --git a/ssl/s3_srvr.c b/ssl/s3_srvr.c
+index c016139..093b9bf 100644
+--- a/ssl/s3_srvr.c
++++ b/ssl/s3_srvr.c
+@@ -3337,22 +3337,15 @@ int ssl3_send_newsession_ticket(SSL *s)
+         p = ssl_handshake_start(s);
+         /*
+          * Initialize HMAC and cipher contexts. If callback present it does
+-         * all the work otherwise use generated values from parent ctx.
++         * all the work otherwise use default callback.
+          */
+         if (tctx->tlsext_ticket_key_cb) {
+             if (tctx->tlsext_ticket_key_cb(s, key_name, iv, &ctx,
+                                            &hctx, 1) < 0)
+                 goto err;
+         } else {
+-            if (RAND_bytes(iv, 16) <= 0)
++            if (handle_session_tickets(s, key_name, iv, &ctx, &hctx, 1) <= 0)
+                 goto err;
+-            if (!EVP_EncryptInit_ex(&ctx, EVP_aes_128_cbc(), NULL,
+-                                    tctx->tlsext_tick_aes_key, iv))
+-                goto err;
+-            if (!HMAC_Init_ex(&hctx, tctx->tlsext_tick_hmac_key, 16,
+-                              tlsext_tick_md(), NULL))
+-                goto err;
+-            memcpy(key_name, tctx->tlsext_tick_key_name, 16);
+         }
+ 
+         /*
+diff --git a/ssl/ssl.h b/ssl/ssl.h
+index a6d845d..b83546c 100644
+--- a/ssl/ssl.h
++++ b/ssl/ssl.h
+@@ -370,13 +370,28 @@ extern "C" {
+  * function parameters used to prototype callbacks in SSL_CTX.
+  */
+ typedef struct ssl_st *ssl_crock_st;
+-typedef struct tls_session_ticket_ext_st TLS_SESSION_TICKET_EXT;
+ typedef struct ssl_method_st SSL_METHOD;
+ typedef struct ssl_cipher_st SSL_CIPHER;
+ typedef struct ssl_session_st SSL_SESSION;
+ typedef struct tls_sigalgs_st TLS_SIGALGS;
+ typedef struct ssl_conf_ctx_st SSL_CONF_CTX;
+ 
++# ifndef OPENSSL_NO_TLSEXT
++typedef struct tls_session_ticket_ext_st TLS_SESSION_TICKET_EXT;
++typedef struct sess_ticket_key_st SESS_TICKET_KEY;
++typedef struct sess_ticket_key_set_st SESS_TICKET_KEY_LIST;
++
++typedef int (*tls_session_ticket_ext_cb_fn)(SSL *s,
++                                            const unsigned char *data,
++                                            int len, void *arg);
++int handle_session_tickets(SSL *s, unsigned char key_name[16], unsigned char iv[EVP_MAX_IV_LENGTH], EVP_CIPHER_CTX *ctx, HMAC_CTX *hctx, int enc);
++
++# define SSL_RESUME_SUCCESS_RENEW 2
++# define SSL_RESUME_SUCCESS 1
++# define SSL_RESUME_NOPE 0
++# define SSL_RESUME_ERROR -1
++# endif
++
+ DECLARE_STACK_OF(SSL_CIPHER)
+ 
+ /* SRTP protection profiles for use with the use_srtp extension (RFC 5764)*/
+@@ -387,9 +402,6 @@ typedef struct srtp_protection_profile_st {
+ 
+ DECLARE_STACK_OF(SRTP_PROTECTION_PROFILE)
+ 
+-typedef int (*tls_session_ticket_ext_cb_fn) (SSL *s,
+-                                             const unsigned char *data,
+-                                             int len, void *arg);
+ typedef int (*tls_session_secret_cb_fn) (SSL *s, void *secret,
+                                          int *secret_len,
+                                          STACK_OF(SSL_CIPHER) *peer_ciphers,
+@@ -822,6 +834,10 @@ struct ssl_session_st {
+         SSL_ctrl((ssl),SSL_CTRL_TLS_EXT_SEND_HEARTBEAT,0,NULL)
+ # endif
+ 
++# ifndef OPENSSL_NO_TLSEXT
++void SSL_CTX_set_tlsext_ticket_key_list(SSL_CTX *ctx, SESS_TICKET_KEY *keys, int len);
++# endif
++
+ # define SSL_CTX_set_cert_flags(ctx,op) \
+         SSL_CTX_ctrl((ctx),SSL_CTRL_CERT_FLAGS,(op),NULL)
+ # define SSL_set_cert_flags(s,op) \
+@@ -919,6 +935,30 @@ struct ssl_comp_st {
+ #  endif
+ };
+ 
++# ifndef OPENSSL_NO_TLSEXT
++/**
++ * sess_ticket_key is a struct representing a key to use for session ticket
++ * creation and decryption.
++ **/
++struct sess_ticket_key_st {
++    unsigned char key_name[16];
++    unsigned char hmac_key[16];
++    unsigned char aes_key[16];
++};
++
++/**
++ * A struct representing all currently available keys. Clients can resume
++ * sessions created using any of the keys in `all.' New tickets are created
++ * using all[0]. This allows smooth rotation of keys in order to provide
++ * forward secrecy without a jump in resumption rate at each rotation.
++ **/
++struct sess_ticket_key_set_st {
++    SESS_TICKET_KEY *all;
++    int all_len;
++    int references;
++};
++# endif
++
+ DECLARE_STACK_OF(SSL_COMP)
+ DECLARE_LHASH_OF(SSL_SESSION);
+ 
+@@ -1075,10 +1115,10 @@ struct ssl_ctx_st {
+     /* TLS extensions servername callback */
+     int (*tlsext_servername_callback) (SSL *, int *, void *);
+     void *tlsext_servername_arg;
+-    /* RFC 4507 session ticket keys */
+-    unsigned char tlsext_tick_key_name[16];
+-    unsigned char tlsext_tick_hmac_key[16];
+-    unsigned char tlsext_tick_aes_key[16];
++
++    /* A set of session ticket keys for RFC 5077 resumption. */
++    SESS_TICKET_KEY_LIST* ticket_key_list;
++
+     /* Callback to support customisation of ticket key setting */
+     int (*tlsext_ticket_key_cb) (SSL *ssl,
+                                  unsigned char *name, unsigned char *iv,
+@@ -2746,6 +2786,7 @@ void ERR_load_SSL_strings(void);
+ # define SSL_F_SSL_CTX_SET_PURPOSE                        226
+ # define SSL_F_SSL_CTX_SET_SESSION_ID_CONTEXT             219
+ # define SSL_F_SSL_CTX_SET_SSL_VERSION                    170
++# define SSL_F_SSL_CTX_SET_TLSEXT_TICKET_KEY_LIST         339
+ # define SSL_F_SSL_CTX_SET_TRUST                          229
+ # define SSL_F_SSL_CTX_USE_CERTIFICATE                    171
+ # define SSL_F_SSL_CTX_USE_CERTIFICATE_ASN1               172
+diff --git a/ssl/ssl_err.c b/ssl/ssl_err.c
+index ab3aa23..1cbe626 100644
+--- a/ssl/ssl_err.c
++++ b/ssl/ssl_err.c
+@@ -253,6 +253,8 @@ static ERR_STRING_DATA SSL_str_functs[] = {
+     {ERR_FUNC(SSL_F_SSL_CTX_SET_SESSION_ID_CONTEXT),
+      "SSL_CTX_set_session_id_context"},
+     {ERR_FUNC(SSL_F_SSL_CTX_SET_SSL_VERSION), "SSL_CTX_set_ssl_version"},
++    {ERR_FUNC(SSL_F_SSL_CTX_SET_TLSEXT_TICKET_KEY_LIST),
++     "SSL_CTX_set_tlsext_ticket_key_list"},
+     {ERR_FUNC(SSL_F_SSL_CTX_SET_TRUST), "SSL_CTX_set_trust"},
+     {ERR_FUNC(SSL_F_SSL_CTX_USE_CERTIFICATE), "SSL_CTX_use_certificate"},
+     {ERR_FUNC(SSL_F_SSL_CTX_USE_CERTIFICATE_ASN1),
+diff --git a/ssl/ssl_lib.c b/ssl/ssl_lib.c
+index e9ad2bc..690cebf 100644
+--- a/ssl/ssl_lib.c
++++ b/ssl/ssl_lib.c
+@@ -145,6 +145,7 @@
+ #ifdef REF_CHECK
+ # include <assert.h>
+ #endif
++#include <limits.h>
+ #include <stdio.h>
+ #include "ssl_locl.h"
+ #include "kssl_lcl.h"
+@@ -1858,6 +1859,11 @@ static int ssl_session_cmp(const SSL_SESSION *a, const SSL_SESSION *b)
+ static IMPLEMENT_LHASH_HASH_FN(ssl_session, SSL_SESSION)
+ static IMPLEMENT_LHASH_COMP_FN(ssl_session, SSL_SESSION)
+ 
++#ifndef OPENSSL_NO_TLSEXT
++#define KEY_ELEM_LEN 16
++void SESS_TICKET_KEY_LIST_free(SESS_TICKET_KEY_LIST *key_list);
++#endif
++
+ SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
+ {
+     SSL_CTX *ret = NULL;
+@@ -1984,11 +1990,14 @@ SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
+ #ifndef OPENSSL_NO_TLSEXT
+     ret->tlsext_servername_callback = 0;
+     ret->tlsext_servername_arg = NULL;
+-    /* Setup RFC4507 ticket keys */
+-    if ((RAND_pseudo_bytes(ret->tlsext_tick_key_name, 16) <= 0)
+-        || (RAND_bytes(ret->tlsext_tick_hmac_key, 16) <= 0)
+-        || (RAND_bytes(ret->tlsext_tick_aes_key, 16) <= 0))
++    /* Setup RFC5077 ticket keys */
++    SESS_TICKET_KEY key;
++    if ((RAND_pseudo_bytes(key.key_name, KEY_ELEM_LEN) <= 0)
++        || (RAND_bytes(key.hmac_key, KEY_ELEM_LEN) <= 0)
++        || (RAND_bytes(key.aes_key, KEY_ELEM_LEN) <= 0))
+         ret->options |= SSL_OP_NO_TICKET;
++    else
++        SSL_CTX_set_tlsext_ticket_keys(ret, (unsigned char*)&key, sizeof(SESS_TICKET_KEY));
+ 
+     ret->tlsext_status_cb = 0;
+     ret->tlsext_status_arg = NULL;
+@@ -2160,6 +2169,7 @@ void SSL_CTX_free(SSL_CTX *a)
+         ssl_buf_freelist_free(a->rbuf_freelist);
+ #endif
+ #ifndef OPENSSL_NO_TLSEXT
++    SESS_TICKET_KEY_LIST_free(a->ticket_key_list);
+ # ifndef OPENSSL_NO_EC
+     if (a->tlsext_ecpointformatlist)
+         OPENSSL_free(a->tlsext_ecpointformatlist);
+@@ -3529,6 +3539,156 @@ int SSL_is_server(SSL *s)
+ # include "../crypto/bio/bss_file.c"
+ #endif
+ 
++#ifndef OPENSSL_NO_TLSEXT
++
++/* Must be called with non-null keys. */
++SESS_TICKET_KEY *find_ticket_key(SESS_TICKET_KEY_LIST *keys,
++                                 unsigned char key_name[KEY_ELEM_LEN]) {
++    int i;
++    if (keys != NULL) {
++        for (i = 0; i < keys->all_len; i++) {
++            SESS_TICKET_KEY *key = &keys->all[i];
++            if (memcmp(key->key_name, key_name, KEY_ELEM_LEN) == 0)
++                return key;
++        }
++    }
++    return NULL;
++}
++
++/* Decrement reference count for key_list and free it if zero. */
++void SESS_TICKET_KEY_LIST_free(SESS_TICKET_KEY_LIST *key_list) {
++    int lock_result;
++
++    if (key_list == NULL)
++        return;
++
++    lock_result = CRYPTO_add(&key_list->references, -1, CRYPTO_LOCK_SSL_CTX);
++# ifdef REF_PRINT
++    REF_PRINT("SESS_TICKET_KEY_LIST", s);
++# endif
++    if (lock_result > 0) return;
++# ifdef REF_CHECK
++    if (lock_result < 0) {
++        fprintf(stderr,"SESS_TICKET_KEY_LIST_free, bad reference count\n");
++        abort();
++    }
++# endif
++    OPENSSL_cleanse(key_list->all, sizeof(SESS_TICKET_KEY) * key_list->all_len);
++    if (key_list->all)
++        free(key_list->all);
++    free(key_list);
++}
++
++int handle_session_tickets_inner(SESS_TICKET_KEY_LIST *key_list,
++                                 unsigned char key_name[KEY_ELEM_LEN], unsigned char iv[EVP_MAX_IV_LENGTH],
++                                 EVP_CIPHER_CTX *ctx, HMAC_CTX *hctx, int enc) {
++    if (key_list == NULL || key_list->all == NULL)
++        return SSL_RESUME_ERROR;
++
++    /* Request has no ticket, or unrecognized ticket, or we are renewing based on
++     * a recognized ticket: Encrypt a new ticket to send to the client. */
++    if (enc) {
++        /* The first key in the list is used for all new tickets. */
++        SESS_TICKET_KEY *key = &key_list->all[0];
++
++        if (RAND_bytes(iv, EVP_MAX_IV_LENGTH) <= 0)
++            return SSL_RESUME_ERROR; /* insufficient random */
++        EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key->aes_key, iv);
++        HMAC_Init_ex(hctx, key->hmac_key, KEY_ELEM_LEN, tlsext_tick_md(), NULL);
++        memcpy(key_name, key->key_name, KEY_ELEM_LEN);
++        return SSL_RESUME_SUCCESS;
++    } else {
++        /* Request has session ticket. */
++        SESS_TICKET_KEY *key = find_ticket_key(key_list, key_name);
++        if (!key) {
++            /* if the key is so old that it's no longer in our list, we have to do a full handshake. */
++            return SSL_RESUME_NOPE;
++        }
++        EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key->aes_key, iv);
++        HMAC_Init_ex(hctx, key->hmac_key, KEY_ELEM_LEN, tlsext_tick_md(), NULL);
++        if (key != &key_list->all[0]) {
++            /* Successful resume, but key is stale. Function will be called again with
++               enc = 1 to re-encrypt the session parameters with the current key. */
++            return SSL_RESUME_SUCCESS_RENEW;
++        }
++        return SSL_RESUME_SUCCESS;
++    }
++}
++
++/* Outer function to handle resumption from or creation of RFC 5077 session tickets.
++ * This function handles reference counting and calls into an inner function for the
++ * key lookup. */
++int handle_session_tickets(SSL *s,
++                           unsigned char key_name[KEY_ELEM_LEN], unsigned char iv[EVP_MAX_IV_LENGTH],
++                           EVP_CIPHER_CTX *ctx, HMAC_CTX *hctx, int enc) {
++    /* It's possible s->ctx->ticket_key_list gets changed while we are
++     * looking for the right key. So we save a pointer and increment the
++     * reference count so it doesn't get deleted from under us. */
++    CRYPTO_w_lock(CRYPTO_LOCK_SSL_CTX);
++    SESS_TICKET_KEY_LIST *list = s->ctx->ticket_key_list;
++    if (list != NULL)
++        list->references++;
++    CRYPTO_w_unlock(CRYPTO_LOCK_SSL_CTX);
++
++    int code = handle_session_tickets_inner(list, key_name, iv, ctx, hctx, enc);
++
++    SESS_TICKET_KEY_LIST_free(list);
++    return code;
++}
++
++/* Assign a list of one or more keys to be used for RFC 5077 session tickets.
++ * The first key in the list (key[0]) is considered the 'current' key. New
++ * tickets will be signed / encrypted using it, and old sessions will be
++ * re-signed and re-encrypted using it. `len' is the number of keys, not the
++ * number of bytes.
++ *
++ * This is useful for ticket key rotation. Typically an implementer would add
++ * new keys near the front of the list as they are generated, while preserving
++ * a few recent keys so there is no sudden drop in resumption rates. Lookup
++ * by key_name is O(n) so small numbers of keys are ideal.
++ *
++ * For the cleanest switchover to new keys, provide new keys at some non-initial
++ * point in the list, then bring it to the `current' position once all frontends
++ * are probably in possession of the new key (for instance, after a suitable
++ * interval of time).
++ *
++ * OpenSSL makes a copy of the keys, and overwrites the input. */
++void SSL_CTX_set_tlsext_ticket_key_list(SSL_CTX *ctx, SESS_TICKET_KEY *keys, int len) {
++    if (keys == NULL || len < 1 || INT_MAX / sizeof(SESS_TICKET_KEY) < len) {
++        SSLerr(SSL_F_SSL_CTX_SET_TLSEXT_TICKET_KEY_LIST,ERR_R_PASSED_NULL_PARAMETER);
++        return;
++    }
++
++    SESS_TICKET_KEY_LIST *old_list,
++                         *new_list = OPENSSL_malloc(sizeof(SESS_TICKET_KEY_LIST));
++
++    if (new_list == NULL) {
++        SSLerr(SSL_F_SSL_CTX_SET_TLSEXT_TICKET_KEY_LIST,ERR_R_MALLOC_FAILURE);
++        OPENSSL_cleanse(keys, sizeof(SESS_TICKET_KEY) * len);
++        return;
++    }
++    new_list->references = 1;
++    new_list->all = (SESS_TICKET_KEY*)OPENSSL_malloc(sizeof(SESS_TICKET_KEY) * len);
++    new_list->all_len = len;
++    if (new_list->all == NULL) {
++        SSLerr(SSL_F_SSL_CTX_SET_TLSEXT_TICKET_KEY_LIST,ERR_R_MALLOC_FAILURE);
++        OPENSSL_cleanse(keys, sizeof(SESS_TICKET_KEY) * len);
++        return;
++    }
++
++    memcpy(new_list->all, keys, len * sizeof(SESS_TICKET_KEY));
++    OPENSSL_cleanse(keys, sizeof(SESS_TICKET_KEY) * len);
++
++    CRYPTO_w_lock(CRYPTO_LOCK_SSL_CTX);
++    old_list = ctx->ticket_key_list;
++    ctx->ticket_key_list = new_list;
++    CRYPTO_w_unlock(CRYPTO_LOCK_SSL_CTX);
++
++    SESS_TICKET_KEY_LIST_free(old_list);
++}
++
++#endif /* OPENSSL_NO_TLSEXT */
++
+ IMPLEMENT_STACK_OF(SSL_CIPHER)
+ IMPLEMENT_STACK_OF(SSL_COMP)
+ IMPLEMENT_OBJ_BSEARCH_GLOBAL_CMP_FN(SSL_CIPHER, SSL_CIPHER, ssl_cipher_id);
+diff --git a/ssl/t1_lib.c b/ssl/t1_lib.c
+index d85d26e..454c56d 100644
+--- a/ssl/t1_lib.c
++++ b/ssl/t1_lib.c
+@@ -3343,31 +3343,29 @@ static int tls_decrypt_ticket(SSL *s, const unsigned char *etick,
+     HMAC_CTX hctx;
+     EVP_CIPHER_CTX ctx;
+     SSL_CTX *tctx = s->initial_ctx;
++    unsigned char *nctick = (unsigned char *)etick;
++    int rv;
++
+     /* Need at least keyname + iv + some encrypted data */
+     if (eticklen < 48)
+         return 2;
+     /* Initialize session ticket encryption and HMAC contexts */
+     HMAC_CTX_init(&hctx);
+     EVP_CIPHER_CTX_init(&ctx);
+-    if (tctx->tlsext_ticket_key_cb) {
+-        unsigned char *nctick = (unsigned char *)etick;
+-        int rv = tctx->tlsext_ticket_key_cb(s, nctick, nctick + 16,
+-                                            &ctx, &hctx, 0);
+-        if (rv < 0)
+-            return -1;
+-        if (rv == 0)
+-            return 2;
+-        if (rv == 2)
+-            renew_ticket = 1;
++
++    if (tctx->tlsext_ticket_key_cb != NULL) {
++        rv = tctx->tlsext_ticket_key_cb(s, nctick, nctick + 16, &ctx, &hctx, 0);
+     } else {
+-        /* Check key name matches */
+-        if (memcmp(etick, tctx->tlsext_tick_key_name, 16))
+-            return 2;
+-        HMAC_Init_ex(&hctx, tctx->tlsext_tick_hmac_key, 16,
+-                     tlsext_tick_md(), NULL);
+-        EVP_DecryptInit_ex(&ctx, EVP_aes_128_cbc(), NULL,
+-                           tctx->tlsext_tick_aes_key, etick + 16);
++        rv = handle_session_tickets(s, nctick, nctick + 16, &ctx, &hctx, 0);
+     }
++
++    if (rv < 0)
++        return -1;
++    if (rv == 0)
++        return 2;
++    if (rv == 2)
++        renew_ticket = 1;
++
+     /*
+      * Attempt to process session ticket, first conduct sanity and integrity
+      * checks on ticket.

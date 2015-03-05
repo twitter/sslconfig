@@ -1,0 +1,15 @@
+diff --git a/ssl/s3_lib.c b/ssl/s3_lib.c
+index 28129f6..cbbaa0d 100644
+--- a/ssl/s3_lib.c
++++ b/ssl/s3_lib.c
+@@ -4094,6 +4094,10 @@ SSL_CIPHER *ssl3_choose_cipher(SSL *s, STACK_OF(SSL_CIPHER) *clnt,
+         if ((c->algorithm_ssl & SSL_TLSV1_2) && !SSL_USE_TLS1_2_CIPHERS(s))
+             continue;
+ 
++        /* Disable RC4 for TLS v1.1+ */
++        if ((c->algorithm_enc == SSL_RC4) && (TLS1_get_version(s) >= TLS1_1_VERSION))
++            continue;
++
+         ssl_set_cert_masks(cert, c);
+         mask_k = cert->mask_k;
+         mask_a = cert->mask_a;
