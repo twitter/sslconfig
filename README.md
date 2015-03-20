@@ -1,9 +1,9 @@
 sslconfig
 =========
 
-Twitter's OpenSSL configuration
+Twitter's OpenSSL configuration. The goal of this project is to share our work with upstream and any other interested parties. We intend to open source any future work we do that improves the security of Twitter and the internet as a whole.
 
-Twitter currently uses OpenSSL 1.0.2a (+ patches).
+At the time of this writing, Twitter currently uses OpenSSL 1.0.2a (+ patches).
 
 Twitter enables the following ciphers (using the server's preference):
 
