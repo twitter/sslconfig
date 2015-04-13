@@ -8,13 +8,8 @@ At the time of this writing, Twitter currently uses OpenSSL 1.0.2a (+ patches).
 Twitter enables the following ciphers (using the server's preference):
 
 ```
-ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:RC4-SHA
+ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA
 ```
-
-## RC4 Patch
-
-Twitter uses a [patch](patches/openssl_disable_rc4.patch) for OpenSSL that
-disables the use of RC4 in TLS v1.1+.
 
 ## Session Ticket Patch
 
