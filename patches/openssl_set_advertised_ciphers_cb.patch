@@ -2,7 +2,7 @@ diff --git a/ssl/s3_srvr.c b/ssl/s3_srvr.c
 index c016139..095f4c4 100644
 --- a/ssl/s3_srvr.c
 +++ b/ssl/s3_srvr.c
-@@ -1105,6 +1105,10 @@ int ssl3_get_client_hello(SSL *s)
+@@ -1152,6 +1152,10 @@ int ssl3_get_client_hello(SSL *s)
      }
      p += i;
  
@@ -11,7 +11,7 @@ index c016139..095f4c4 100644
 +    }
 +
      /* If it is a hit, check that the cipher is in the list */
-     if ((s->hit) && (i > 0)) {
+     if (s->hit) {
          j = 0;
 diff --git a/ssl/ssl.h b/ssl/ssl.h
 index a6d845d..917b54e 100644
