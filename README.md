@@ -20,8 +20,3 @@ enables session ticket key rotation via a new API call, SSL_CTX_set_tlsext_ticke
 
 Twitter uses a [patch](patches/openssl_set_advertised_ciphers_cb.patch) for OpenSSL that
 registers a callback to introspect the client's advertised ciphers.
-
-## License
-Copyright 2015 Twitter, Inc.
-
-Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
